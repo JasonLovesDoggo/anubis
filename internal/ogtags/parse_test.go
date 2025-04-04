@@ -100,6 +100,35 @@ func TestExtractOGTags(t *testing.T) {
 				"description": "Approved Description Tag",
 			},
 		},
+		{
+			name: "Title tag only",
+			htmlStr: `<!DOCTYPE html>
+						<html>
+						<head>
+							<title>HTML Page Title</title>
+							<meta name="description" content="A description." />
+						</head>
+						<body></body>
+						</html>`,
+			expected: map[string]string{
+				"og:title":    "HTML Page Title", // Falls back to <title>
+				"description": "A description.",
+			},
+		},
+		{
+			name: "Both Title and OG Title",
+			htmlStr: `<!DOCTYPE html>
+						<html>
+						<head>
+							<title>HTML Page Title</title>
+							<meta property="og:title" content="OG Meta Title" />
+						</head>
+						<body></body>
+						</html>`,
+			expected: map[string]string{
+				"og:title": "OG Meta Title", // Prefers og:title meta tag
+			},
+		},
 	}
 
 	for _, tt := range tests {

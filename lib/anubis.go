@@ -337,14 +337,26 @@ func (s *Server) MaybeReverseProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) RenderIndex(w http.ResponseWriter, r *http.Request) {
-	ogTags, err := s.OGTags.GetOGTags(r.URL)
-	if err != nil {
-		slog.Error("failed to get OG tags", "err", err)
-		ogTags = nil
+	pageTitle := "Making sure you're not a bot!" // Default challenge title
+	var ogTags map[string]string = nil
+
+	if s.opts.OGPassthrough {
+		ogTags, err := s.OGTags.GetOGTags(r.URL)
+		if err != nil {
+			slog.Error("failed to get OG tags", "err", err)
+			ogTags = nil
+		}
+
+		if ogTags != nil {
+			if title, ok := ogTags["og:title"]; ok && title != "" {
+				pageTitle = title
+			}
+		}
 	}
+
 	handler := internal.NoStoreCache(
 		templ.Handler(
-			web.BaseWithOGTags("Making sure you're not a bot!", web.Index(), ogTags),
+			web.BaseWithOGTags(pageTitle, web.Index(), ogTags),
 		),
 	)
 	handler.ServeHTTP(w, r)

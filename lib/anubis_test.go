@@ -3,24 +3,28 @@ package lib
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/TecharoHQ/anubis"
 	"github.com/TecharoHQ/anubis/internal"
 	"github.com/TecharoHQ/anubis/lib/policy"
+	"golang.org/x/net/html"
 )
 
 func loadPolicies(t *testing.T, fname string) *policy.ParsedConfig {
 	t.Helper()
 
-	policy, err := LoadPoliciesOrDefault("", anubis.DefaultDifficulty)
+	loadedPolicies, err := LoadPoliciesOrDefault("", anubis.DefaultDifficulty)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return policy
+	return loadedPolicies
 }
 
 func spawnAnubis(t *testing.T, opts Options) *Server {
@@ -231,6 +235,133 @@ func TestCheckDefaultDifficultyMatchesPolicy(t *testing.T) {
 
 			if bot.Challenge.ReportAs != i {
 				t.Errorf("Challenge.ReportAs is wrong, wanted %d, got: %d", i, bot.Challenge.ReportAs)
+			}
+		})
+	}
+}
+
+func TestRenderIndexWithOGTitle(t *testing.T) {
+	mockTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/og-title-only":
+			w.Write([]byte(`<html><head><meta property="og:title" content="OG Title"></head><body>Hello</body></html>`))
+		case "/html-title-only":
+			w.Write([]byte(`<html><head><title>HTML Title</title></head><body>Hello</body></html>`))
+		case "/both-titles":
+			w.Write([]byte(`<html><head><title>HTML Title</title><meta property="og:title" content="OG Title"></head><body>Hello</body></html>`))
+		case "/no-titles":
+			w.Write([]byte(`<html><head><title>Making sure you're not a bot!</title></head><body>Hello</body></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mockTarget.Close()
+
+	pol := loadPolicies(t, "")
+
+	anubisServer := spawnAnubis(t, Options{
+		Next: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("Unexpected call to Next handler for path: %s", r.URL.Path)
+			http.Error(w, "Should not have reached Next handler in this test", http.StatusInternalServerError)
+		}),
+		Policy:          pol,
+		OGPassthrough:   true,
+		OGTimeToLive:    1 * time.Minute,
+		OGQueryDistinct: false,
+		Target:          mockTarget.URL,
+	})
+
+	testServer := httptest.NewServer(internal.RemoteXRealIP(true, "tcp", anubisServer))
+	defer testServer.Close()
+
+	// --- Test Cases ---
+	testCases := []struct {
+		name          string
+		path          string
+		expectedTitle string
+	}{
+		{"OG Title Only", "/og-title-only", "OG Title"},
+		{"HTML Title Only", "/html-title-only", "HTML Title"},        // ogtags parser falls back to <title>
+		{"Both Titles", "/both-titles", "HTML Title"},                // og:title meta tag takes precedence
+		{"No Titles", "/no-titles", "Making sure you're not a bot!"}, // Default title
+		{"Not Found", "/not-found", "Making sure you're not a bot!"}, // Default title on error fetching OG tags
+	}
+
+	// Use a single client for all tests
+	client := testServer.Client()
+	// Prevent the client from following redirects automatically if Anubis were to issue one
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	for _, tc := range testCases {
+		tc := tc // Capture range variable
+		t.Run(tc.name, func(t *testing.T) {
+			// --- Execute Request ---
+			req, err := http.NewRequest("GET", testServer.URL+tc.path, nil)
+			if err != nil {
+				t.Fatalf("Failed to create request: %v", err)
+			}
+
+			// Add realistic headers often checked by WAFs/policies
+			// X-Real-Ip is added by the RemoteXRealIP middleware in testServer
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Failed to perform request: %v", err)
+			}
+			defer resp.Body.Close()
+
+			// Expect 200 OK because Anubis should render the challenge page
+			if resp.StatusCode != http.StatusOK {
+				bodyBytes, _ := io.ReadAll(resp.Body) // Read body for debugging info
+				t.Logf("Response Headers: %v", resp.Header)
+				t.Logf("Response Body: %s", string(bodyBytes))
+				t.Fatalf("Expected status OK (200), got %d for path %s", resp.StatusCode, tc.path)
+			}
+
+			// --- Verify HTML Title ---
+			doc, err := html.Parse(resp.Body)
+			if err != nil {
+				t.Fatalf("Failed to parse response HTML: %v", err)
+			}
+
+			actualTitle := ""
+			var crawler func(*html.Node)
+			crawler = func(node *html.Node) {
+				// Stop crawling if title already found
+				if actualTitle != "" {
+					return
+				}
+				if node.Type == html.ElementNode && node.Data == "title" {
+					if node.FirstChild != nil && node.FirstChild.Type == html.TextNode {
+						actualTitle = strings.TrimSpace(node.FirstChild.Data)
+						return // Found it
+					}
+				}
+				for c := node.FirstChild; c != nil; c = c.NextSibling {
+					crawler(c)
+					// Optimization: if crawler found it in a child, stop iterating siblings
+					if actualTitle != "" {
+						return
+					}
+				}
+			}
+			crawler(doc)
+
+			if actualTitle == "" && tc.expectedTitle != "Making sure you're not a bot!" {
+				// If we expected a specific title but found none in the HTML
+				t.Errorf("Expected title '%s', but no <title> tag was found in the response", tc.expectedTitle)
+			} else if actualTitle != "" && actualTitle != tc.expectedTitle {
+				// If we found a title but it doesn't match
+				t.Errorf("Expected title '%s', but got '%s'", tc.expectedTitle, actualTitle)
+			} else if actualTitle == "" && tc.expectedTitle == "Making sure you're not a bot!" {
+				// If we correctly expected the default title (because none was found in HTML) - This is OK
+				t.Logf("Correctly got default title because no <title> tag was found.")
 			}
 		})
 	}

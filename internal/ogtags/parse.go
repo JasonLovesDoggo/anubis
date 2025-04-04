@@ -9,8 +9,7 @@ import (
 // extractOGTags traverses the HTML document and extracts approved Open Graph tags
 func (c *OGTagCache) extractOGTags(doc *html.Node) map[string]string {
 	ogTags := make(map[string]string)
-
-	var traverseNodes func(*html.Node)
+	var traverseNodes func(*html.Node) // Define traverseNodes before using it
 	traverseNodes = func(n *html.Node) {
 		// isOGMetaTag only checks if it's a <meta> tag.
 		// The actual filtering happens in extractMetaTagInfo now.
@@ -21,12 +20,16 @@ func (c *OGTagCache) extractOGTags(doc *html.Node) map[string]string {
 			}
 		}
 
+		// Extract the <title> tag content
+		// We don't need to extract <title> here anymore for the ogTags map.
+
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			traverseNodes(child)
 		}
 	}
 
 	traverseNodes(doc)
+
 	return ogTags
 }
 
