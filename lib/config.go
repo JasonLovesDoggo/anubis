@@ -14,14 +14,15 @@ import (
 
 	"github.com/TecharoHQ/anubis"
 	"github.com/TecharoHQ/anubis/data"
-	"github.com/TecharoHQ/anubis/decaymap"
 	"github.com/TecharoHQ/anubis/internal"
+	"github.com/TecharoHQ/anubis/internal/cache"
 	"github.com/TecharoHQ/anubis/internal/dnsbl"
 	"github.com/TecharoHQ/anubis/internal/ogtags"
 	"github.com/TecharoHQ/anubis/lib/challenge"
 	"github.com/TecharoHQ/anubis/lib/policy"
 	"github.com/TecharoHQ/anubis/web"
 	"github.com/TecharoHQ/anubis/xess"
+	"github.com/dgraph-io/ristretto/v2"
 )
 
 type Options struct {
@@ -105,12 +106,22 @@ func New(opts Options) (*Server, error) {
 	}
 
 	result := &Server{
-		next:       opts.Next,
-		priv:       opts.PrivateKey,
-		pub:        opts.PrivateKey.Public().(ed25519.PublicKey),
-		policy:     opts.Policy,
-		opts:       opts,
-		DNSBLCache: decaymap.New[string, dnsbl.DroneBLResponse](),
+		next:   opts.Next,
+		priv:   opts.PrivateKey,
+		pub:    opts.PrivateKey.Public().(ed25519.PublicKey),
+		policy: opts.Policy,
+		opts:   opts,
+		DNSBLCache: func() *ristretto.Cache[string, dnsbl.DroneBLResponse] {
+			c, err := ristretto.NewCache[string, dnsbl.DroneBLResponse](&ristretto.Config[string, dnsbl.DroneBLResponse]{
+				NumCounters: cache.DNSBLNumCounters,
+				MaxCost:     cache.DNSBLMaxCost,
+				BufferItems: cache.DNSBLBufferItems,
+			})
+			if err != nil {
+				panic(fmt.Sprintf("failed to create DNSBL cache: %v", err))
+			}
+			return c
+		}(),
 		OGTags:     ogtags.NewOGTagCache(opts.Target, opts.OGPassthrough, opts.OGTimeToLive, opts.OGCacheConsidersHost),
 		cookieName: cookieName,
 	}

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/TecharoHQ/anubis/internal/cache"
 	"golang.org/x/net/html"
 )
 
@@ -41,7 +42,12 @@ func (c *OGTagCache) fetchHTMLDocumentWithCache(urlStr string, originalHost stri
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			slog.Debug("og: request timed out", "url", urlStr)
-			c.cache.Set(cacheKey, emptyMap, c.ogTimeToLive/2) // Cache empty result for half the TTL to not spam the server
+			ttl := c.ogTimeToLive / 2
+			if ttl <= 0 {
+				ttl = cache.OGTagsDefaultTTL / 2
+			}
+			c.cache.SetWithTTL(cacheKey, emptyMap, 1, ttl) // Cache empty result to not spam the server
+			c.cache.Wait()                                 // Wait for the value to be processed by ristretto
 		}
 		return nil, fmt.Errorf("http get failed: %w", err)
 	}
@@ -56,7 +62,12 @@ func (c *OGTagCache) fetchHTMLDocumentWithCache(urlStr string, originalHost stri
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("og: received non-OK status code", "url", urlStr, "status", resp.StatusCode)
-		c.cache.Set(cacheKey, emptyMap, c.ogTimeToLive) // Cache empty result for non-successful status codes
+		ttl := c.ogTimeToLive
+		if ttl <= 0 {
+			ttl = cache.OGTagsDefaultTTL
+		}
+		c.cache.SetWithTTL(cacheKey, emptyMap, 1, ttl) // Cache empty result for non-successful status codes
+		c.cache.Wait()                                 // Wait for the value to be processed by ristretto
 		return nil, fmt.Errorf("%w: page not found", ErrOgHandled)
 	}
 

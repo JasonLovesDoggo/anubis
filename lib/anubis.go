@@ -14,14 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgraph-io/ristretto/v2"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/TecharoHQ/anubis"
-	"github.com/TecharoHQ/anubis/decaymap"
 	"github.com/TecharoHQ/anubis/internal"
+	"github.com/TecharoHQ/anubis/internal/cache"
 	"github.com/TecharoHQ/anubis/internal/dnsbl"
 	"github.com/TecharoHQ/anubis/internal/ogtags"
 	"github.com/TecharoHQ/anubis/lib/challenge"
@@ -64,7 +65,7 @@ type Server struct {
 	next       http.Handler
 	mux        *http.ServeMux
 	policy     *policy.ParsedConfig
-	DNSBLCache *decaymap.Impl[string, dnsbl.DroneBLResponse]
+	DNSBLCache *ristretto.Cache[string, dnsbl.DroneBLResponse]
 	OGTags     *ogtags.OGTagCache
 	cookieName string
 	priv       ed25519.PrivateKey
@@ -240,7 +241,8 @@ func (s *Server) handleDNSBL(w http.ResponseWriter, r *http.Request, ip string, 
 			if err != nil {
 				lg.Error("can't look up ip in dnsbl", "err", err)
 			}
-			s.DNSBLCache.Set(ip, resp, 24*time.Hour)
+			s.DNSBLCache.SetWithTTL(ip, resp, 1, cache.DNSBLDefaultTTL)
+			s.DNSBLCache.Wait() // Wait for the value to be processed by ristretto
 			droneBLHits.WithLabelValues(resp.String()).Inc()
 		}
 
@@ -420,12 +422,12 @@ var (
 func (s *Server) check(r *http.Request) (policy.CheckResult, *policy.Bot, error) {
 	host := r.Header.Get("X-Real-Ip")
 	if host == "" {
-		return decaymap.Zilch[policy.CheckResult](), nil, fmt.Errorf("[misconfiguration] X-Real-Ip header is not set")
+		return policy.CheckResult{}, nil, fmt.Errorf("[misconfiguration] X-Real-Ip header is not set")
 	}
 
 	addr := net.ParseIP(host)
 	if addr == nil {
-		return decaymap.Zilch[policy.CheckResult](), nil, fmt.Errorf("[misconfiguration] %q is not an IP address", host)
+		return policy.CheckResult{}, nil, fmt.Errorf("[misconfiguration] %q is not an IP address", host)
 	}
 
 	weight := 0
@@ -433,7 +435,7 @@ func (s *Server) check(r *http.Request) (policy.CheckResult, *policy.Bot, error)
 	for _, b := range s.policy.Bots {
 		match, err := b.Rules.Check(r)
 		if err != nil {
-			return decaymap.Zilch[policy.CheckResult](), nil, fmt.Errorf("can't run check %s: %w", b.Name, err)
+			return policy.CheckResult{}, nil, fmt.Errorf("can't run check %s: %w", b.Name, err)
 		}
 
 		if match {
@@ -488,6 +490,6 @@ func (s *Server) check(r *http.Request) (policy.CheckResult, *policy.Bot, error)
 }
 
 func (s *Server) CleanupDecayMap() {
-	s.DNSBLCache.Cleanup()
+	// ristretto handles cleanup automatically, only cleanup OGTags
 	s.OGTags.Cleanup()
 }

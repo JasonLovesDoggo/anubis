@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/url"
 	"syscall"
+
+	"github.com/TecharoHQ/anubis/internal/cache"
 )
 
 // GetOGTags is the main function that retrieves Open Graph tags for a URL
@@ -38,7 +40,12 @@ func (c *OGTagCache) GetOGTags(url *url.URL, originalHost string) (map[string]st
 	ogTags := c.extractOGTags(doc)
 
 	// Store in cache
-	c.cache.Set(cacheKey, ogTags, c.ogTimeToLive)
+	ttl := c.ogTimeToLive
+	if ttl <= 0 {
+		ttl = cache.OGTagsDefaultTTL
+	}
+	c.cache.SetWithTTL(cacheKey, ogTags, 1, ttl)
+	c.cache.Wait() // Wait for the value to be processed by ristretto
 
 	return ogTags, nil
 }

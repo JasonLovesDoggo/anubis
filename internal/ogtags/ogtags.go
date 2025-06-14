@@ -2,6 +2,7 @@ package ogtags
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -9,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TecharoHQ/anubis/decaymap"
+	"github.com/TecharoHQ/anubis/internal/cache"
+	"github.com/dgraph-io/ristretto/v2"
 )
 
 const (
@@ -21,7 +23,7 @@ const (
 )
 
 type OGTagCache struct {
-	cache               *decaymap.Impl[string, map[string]string]
+	cache               *ristretto.Cache[string, map[string]string]
 	targetURL           *url.URL
 	client              *http.Client
 	approvedTags        []string
@@ -75,7 +77,17 @@ func NewOGTagCache(target string, ogPassthrough bool, ogTimeToLive time.Duration
 	}
 
 	return &OGTagCache{
-		cache:               decaymap.New[string, map[string]string](),
+		cache: func() *ristretto.Cache[string, map[string]string] {
+			c, err := ristretto.NewCache[string, map[string]string](&ristretto.Config[string, map[string]string]{
+				NumCounters: cache.OGTagsNumCounters,
+				MaxCost:     cache.OGTagsMaxCost,
+				BufferItems: cache.OGTagsBufferItems,
+			})
+			if err != nil {
+				panic(fmt.Sprintf("failed to create OGTags cache: %v", err))
+			}
+			return c
+		}(),
 		targetURL:           parsedTargetURL,
 		ogPassthrough:       ogPassthrough,
 		ogTimeToLive:        ogTimeToLive,
@@ -123,7 +135,5 @@ func (c *OGTagCache) getTarget(u *url.URL) string {
 }
 
 func (c *OGTagCache) Cleanup() {
-	if c.cache != nil {
-		c.cache.Cleanup()
-	}
+	// ristretto handles cleanup automatically, no need for manual cleanup
 }

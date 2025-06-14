@@ -27,7 +27,8 @@ func TestCheckCache(t *testing.T) {
 	}
 
 	// Manually add to cache
-	cache.cache.Set(cacheKey, expectedTags, time.Minute)
+	cache.cache.SetWithTTL(cacheKey, expectedTags, 1, time.Minute)
+	cache.cache.Wait() // Wait for the value to be processed by ristretto
 
 	// Test cache hit
 	tags = cache.checkCache(cacheKey)
