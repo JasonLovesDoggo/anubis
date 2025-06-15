@@ -12,6 +12,7 @@ archlinux
 badregexes
 bdba
 berr
+betteralign
 bingbot
 bitcoin
 blogging
@@ -49,6 +50,7 @@ coreutils
 Cotoyogi
 CRDs
 crt
+Cscript
 daemonizing
 DDOS
 Debian
@@ -95,6 +97,7 @@ gomod
 goodbot
 googlebot
 govulncheck
+goyaml
 GPG
 GPT
 gptbot
@@ -107,6 +110,7 @@ hebis
 hec
 hmc
 hostable
+htmlc
 htmx
 httpdebug
 hypertext
@@ -160,6 +164,7 @@ mojeekbot
 mozilla
 nbf
 netsurf
+NFlag
 nginx
 nobots
 NONINFRINGEMENT
@@ -216,6 +221,7 @@ sebest
 secretplans
 selfsigned
 Semrush
+Seo
 setsebool
 shellcheck
 Sidetrade
@@ -248,6 +254,7 @@ traefik
 uberspace
 unixhttpd
 unmarshal
+unparseable
 uuidgen
 uvx
 UXP
